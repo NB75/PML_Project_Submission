@@ -1,0 +1,195 @@
+---
+title: "DS08 - Prediction Assignment Writeup"
+author: "Nicola Bronzino"
+date: "Tuesday, November 10, 2015"
+output: html_document
+---
+
+```{r libraries,echo=FALSE}
+
+library(caret)
+library(ggplot2)
+library(ROCR)
+
+knitr::opts_chunk$set(
+  warning=FALSE,
+  message=FALSE
+)
+
+options(scipen=3,digits=2)
+
+```
+
+
+#Background  
+It is now possible to collect a large amount of data about personal activity relatively inexpensively.   
+In this project, our goal is to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants.  
+They were asked to perform barbell lifts correctly and incorrectly in 5 different ways.  
+The goal of the project is to predict the manner in which they did the exercise. This is the "classe" variable in the training set. 
+
+#Data Load  
+Data are downloaded from the links where they're available (one for training data, one for testing data) and loaded into correspondent data frames.  
+
+```{r data load}
+
+set.seed(13234)
+
+trainUrl <- "http://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+testUrl <- "http://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+
+training <- read.csv(trainUrl)
+testing <- read.csv(testUrl)
+
+#showing number of rows and columns of the two datasets
+dim(training)
+dim(testing)
+
+```
+
+Due to the limited number of observations in the testing data set, we partition training data set.  
+
+```{r data partition}
+
+inTrain <- createDataPartition(training$classe,p=0.7,list=FALSE)
+newTrain <- training[inTrain,]
+newTest  <- training[-inTrain,]
+
+dim(newTrain)
+dim(newTest)
+
+```
+
+#Preprocessing  
+In order to clean and make more manageable the data set, following preprocessing activities are executed:  
+1. Columns of Training with more than 60% of missing values are removed;  
+2. First 5 columns (not relevant for prediction) are removed;  
+3. Variables without variance are removed.
+
+```{r preprocessing}
+
+#01. removing variables with more than 60% of NAs
+threshold <- 0.6
+col_to_select <- c()
+
+for (i in 1:ncol(newTrain)) {
+    curcol <- newTrain[,i]
+    colind <- sum(is.na(curcol))/length(curcol)
+    if (colind <= threshold) {
+        col_to_select <- c(col_to_select,i)
+    }
+
+}
+
+#02. removing columns X and user_name
+X_position <- which(names(newTrain)=="X")
+user_position <- which(names(newTrain)=="user_name")
+ts1_position <- which(names(newTrain)=="raw_timestamp_part_1")
+ts2_position <- which(names(newTrain)=="raw_timestamp_part_2")
+ts3_position <- which(names(newTrain)=="cvtd_timestamp")
+window_position <- which(names(newTrain)=="num_window")
+
+col_to_select <- col_to_select[-c(X_position,user_position,ts1_position,ts2_position,ts3_position,window_position)]
+
+newTrain <- newTrain[,col_to_select]
+newTest  <- newTest[,col_to_select]
+
+#03. removing variables with no variance
+nzvTrain <- nearZeroVar(newTrain, saveMetrics=TRUE)
+nzvTest  <- nearZeroVar(newTest,  saveMetrics=TRUE)
+
+newTrain <- newTrain[,nzvTrain$nzv==FALSE]
+newTest  <- newTest[,nzvTest$nzv==FALSE]
+
+dim(newTrain)
+dim(newTest)
+
+```
+
+#Creation of the Model
+In order to evaluate different approaches to prediction model, different models will be built.  
+1.	Decision Tree  
+2.	Random Forest  
+3.	Generalized Boosted Regression  
+All the models are created considering as predictors all the variables except classe (the outcome).
+
+
+```{r model, cache=TRUE}
+
+#01. Decision Tree
+modFit01 <- train(classe ~ .,data=newTrain,method="rpart",trControl = trainControl(method = "cv", number = 3))
+modFit01$finalModel
+
+
+#02. Random Forest
+modFit02 <- train(classe ~ .,data=newTrain,method="rf",prox=TRUE,trControl = trainControl(method = "cv", number = 3))
+modFit02$finalModel
+
+#03. Generalized Boosted Regression
+modFit03 <- train(classe ~ .,data=newTrain,method="gbm",verbose=FALSE, trControl = trainControl(method = "cv", number = 3))
+modFit03$finalModel
+
+```
+
+#Prediction
+Models generated in the previous point are applied to newTest dataset.  
+
+```{r prediction,cache=TRUE}
+
+#01. Decision Tree
+pred01 <- predict(modFit01,newTest)
+CM01 <- confusionMatrix(pred01,newTest$classe)
+CM01
+
+plot(CM01$table,main="Predictions accuracy with Decision Tree algorithm")
+
+#02. Random Forest
+pred02 <- predict(modFit02,newdata=newTest)
+CM02 <- confusionMatrix(pred02,newTest$classe)
+CM02
+
+plot(CM02$table,main="Predictions accuracy with Random Forest algorithm")
+
+#03. Generalized Boosted Regression
+pred03 <- predict(modFit03,newdata=newTest)
+CM03 <- confusionMatrix(pred03,newTest$classe)
+CM03
+
+plot(CM03$table,main="Predictions accuracy with Generalized Boosted Regression algorithm")
+
+```
+
+#Conclusion  
+
+```{r conclusion,cache=TRUE}
+
+#calculation of accuracies
+acc01 <- CM01[[3]][[1]]*100
+acc02 <- CM02[[3]][[1]]*100
+acc03 <- CM03[[3]][[1]]*100
+
+accuracies <- data.frame(rbind(acc01,acc02,acc03))
+names(accuracies) <- c("value")
+accuracies$model <- c("Decision Tree","Random Forest","Generalized Boosted Regression")
+
+accuracies <- accuracies[order(accuracies$value,decreasing=TRUE),]
+
+maxacc <- accuracies[1,1]
+bestmodel <- accuracies[1,2]
+
+predErr <- 100 - maxacc
+
+```
+
+Based on accuracy in prediction, model with best performance in prediction is **`r bestmodel`**, that has an accuracy of **`r maxacc`**%.  
+Error is equal to **`r predErr`**%.  
+
+#Test set
+Selected model is applied to the test data set and file with answers for the submission is generated.
+
+```{r test,cache=TRUE}
+
+predTest <- predict(modFit02,newdata=testing)
+write.csv(predTest,"testing_result.csv")
+
+```
+
